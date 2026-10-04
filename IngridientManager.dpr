@@ -44,6 +44,31 @@ type
     Next: POrder;
   end;
 
+  TIngRec = record
+    Code: Integer;
+    Name: string[50];
+    Quantity: Double;
+    Proteins: Double;
+    Fats: Double;
+    Carbs: Double;
+    Replaces: array[0..MAX_REPL-1] of Integer;
+    ReplCount: Integer;
+  end;
+
+  TSalRec = record
+    Code: Integer;
+    Name: string[50];
+    Price: Double;
+    Ings: array[0..MAX_ING-1] of TIngPair;
+    IngCount: Integer;
+  end;
+
+  TOrdRec = record
+    SaladCode: Integer;
+    Portions: Integer;
+    CanCook: Boolean;
+  end;
+
 var
   GIngList: PIngredient;
   GSalList: PSalad;
@@ -349,7 +374,6 @@ begin
 end;
 
 function DelOrd(SalCode: Integer): Boolean;
-
 var
   p: POrder;
   prev: POrder;
@@ -388,6 +412,412 @@ begin
     else WriteLn(' [НЕЛЬЗЯ]');
     p:= p^.Next;
   end;
+end;
+
+function CheckDataFile(const FileName: string; RecSize: Integer): Integer;
+var
+  fb: file of Byte;
+  r: Integer;
+begin
+  AssignFile(fb, FileName);
+  {$I-}
+  Reset(fb);
+  r:= IOResult;
+  {$I+}
+  if r <> 0 then
+    Result:= 0
+  else
+  begin
+    if FileSize(fb) mod RecSize <> 0 then
+      Result:= 2
+    else
+      Result:= 1;
+    CloseFile(fb);
+  end;
+end;
+
+procedure ReportBadFile(const FileName: string; Status: Integer);
+begin
+  if Status = 0 then
+    WriteLn('Файл ', FileName, ' не найден.')
+  else
+    WriteLn('Файл ', FileName, ' в устаревшем формате - пропущен (удалите его).');
+end;
+
+procedure ReadFromFiles;
+var
+  fI: file of TIngRec;
+  fS: file of TSalRec;
+  fO: file of TOrdRec;
+  rI: TIngRec;
+  rS: TSalRec;
+  rO: TOrdRec;
+  tmpPI: PIngredient;
+  tmpPS: PSalad;
+  tmpPO: POrder;
+  k: Integer;
+  res: Integer;
+begin
+  while GIngList <> nil do
+  begin
+    tmpPI:= GIngList;
+    GIngList:= GIngList^.Next;
+    Dispose(tmpPI);
+  end;
+  while GSalList <> nil do
+  begin
+    tmpPS:= GSalList;
+    GSalList:= GSalList^.Next;
+    Dispose(tmpPS);
+  end;
+  while GOrdList <> nil do
+  begin
+    tmpPO:= GOrdList;
+    GOrdList:= GOrdList^.Next;
+    Dispose(tmpPO);
+  end;
+
+  AssignFile(fI, 'ingredients.dat');
+  res:= CheckDataFile('ingredients.dat', SizeOf(TIngRec));
+  if res = 1 then
+  begin
+    Reset(fI);
+    while not EOF(fI) do
+    begin
+      Read(fI, rI);
+      AddIng(rI.Code, rI.Name, rI.Quantity, rI.Proteins, rI.Fats, rI.Carbs);
+      tmpPI:= FindIng(rI.Code);
+      if tmpPI <> nil then
+      begin
+        tmpPI^.ReplCount:= rI.ReplCount;
+        if tmpPI^.ReplCount < 0 then tmpPI^.ReplCount:= 0;
+        if tmpPI^.ReplCount > MAX_REPL then tmpPI^.ReplCount:= MAX_REPL;
+        for k:= 0 to tmpPI^.ReplCount - 1 do
+          tmpPI^.Replaces[k]:= rI.Replaces[k];
+      end;
+    end;
+    CloseFile(fI);
+    WriteLn('Ингредиенты загружены.');
+  end else ReportBadFile('ingredients.dat', res);
+
+  AssignFile(fS, 'salads.dat');
+  res:= CheckDataFile('salads.dat', SizeOf(TSalRec));
+  if res = 1 then
+  begin
+    Reset(fS);
+    while not EOF(fS) do
+    begin
+      Read(fS, rS);
+      AddSal(rS.Code, rS.Name, rS.Price);
+      tmpPS:= FindSal(rS.Code);
+      if tmpPS <> nil then
+      begin
+        tmpPS^.IngCount:= rS.IngCount;
+        for k:= 0 to rS.IngCount - 1 do
+          tmpPS^.Ings[k]:= rS.Ings[k];
+      end;
+    end;
+    CloseFile(fS);
+    WriteLn('Салаты загружены.');
+  end else ReportBadFile('salads.dat', res);
+
+  AssignFile(fO, 'orders.dat');
+  res:= CheckDataFile('orders.dat', SizeOf(TOrdRec));
+  if res = 1 then
+  begin
+    Reset(fO);
+    while not EOF(fO) do
+    begin
+      Read(fO, rO);
+      AddOrd(rO.SaladCode, rO.Portions);
+      tmpPO:= FindOrd(rO.SaladCode);
+      if tmpPO <> nil then tmpPO^.CanCook:= rO.CanCook;
+    end;
+    CloseFile(fO);
+    WriteLn('Заказы загружены.');
+  end else ReportBadFile('orders.dat', res);
+end;
+
+procedure WriteToFiles;
+var
+  fI: file of TIngRec;
+  fS: file of TSalRec;
+  fO: file of TOrdRec;
+  rI: TIngRec;
+  rS: TSalRec;
+  rO: TOrdRec;
+  pI: PIngredient;
+  pS: PSalad;
+  pO: POrder;
+  k: Integer;
+begin
+  AssignFile(fI, 'ingredients.dat');
+  Rewrite(fI);
+  pI:= GIngList;
+  while pI <> nil do
+  begin
+    FillChar(rI, SizeOf(rI), 0);
+    rI.Code:= pI^.Code; rI.Name:= pI^.Name; rI.Quantity:= pI^.Quantity;
+    rI.Proteins:= pI^.Proteins; rI.Fats:= pI^.Fats; rI.Carbs:= pI^.Carbs;
+    rI.ReplCount:= pI^.ReplCount;
+    for k:= 0 to pI^.ReplCount - 1 do
+      rI.Replaces[k]:= pI^.Replaces[k];
+    Write(fI, rI);
+    pI:= pI^.Next;
+  end;
+  CloseFile(fI);
+
+  AssignFile(fS, 'salads.dat');
+  Rewrite(fS);
+  pS:= GSalList;
+  while pS <> nil do
+  begin
+    rS.Code:= pS^.Code; rS.Name:= pS^.Name; rS.Price:= pS^.Price; rS.IngCount:= pS^.IngCount;
+    for k:= 0 to pS^.IngCount - 1 do rS.Ings[k]:= pS^.Ings[k];
+    Write(fS, rS);
+    pS:= pS^.Next;
+  end;
+  CloseFile(fS);
+
+  AssignFile(fO, 'orders.dat');
+  Rewrite(fO);
+  pO:= GOrdList;
+  while pO <> nil do
+  begin
+    rO.SaladCode:= pO^.SaladCode; rO.Portions:= pO^.Portions; rO.CanCook:= pO^.CanCook;
+    Write(fO, rO);
+    pO:= pO^.Next;
+  end;
+  CloseFile(fO);
+  WriteLn('Данные сохранены в файлы.');
+end;
+
+procedure QuickSortIng(var A: array of PIngredient; L, R: Integer);
+var
+  i, j: Integer;
+  pivot: string;
+  tmp: PIngredient;
+begin
+  i:= L;
+  j:= R;
+  pivot:= A[(L + R) div 2]^.Name;
+
+  repeat
+    while A[i]^.Name < pivot do
+      Inc(i);
+
+    while A[j]^.Name > pivot do
+      Dec(j);
+
+    if i <= j then
+    begin
+      tmp:= A[i];
+      A[i]:= A[j];
+      A[j]:= tmp;
+
+      Inc(i);
+      Dec(j);
+    end;
+  until i > j;
+
+  if L < j then
+    QuickSortIng(A, L, j);
+
+  if i < R then
+    QuickSortIng(A, i, R);
+end;
+
+procedure QuickSortSal(var A: array of PSalad; L, R: Integer);
+var
+  i, j: Integer;
+  pivot: string;
+  tmp: PSalad;
+begin
+  i:= L;
+  j:= R;
+  pivot:= A[(L + R) div 2]^.Name;
+
+  repeat
+    while A[i]^.Name < pivot do
+      Inc(i);
+
+    while A[j]^.Name > pivot do
+      Dec(j);
+
+    if i <= j then
+    begin
+      tmp:= A[i];
+      A[i]:= A[j];
+      A[j]:= tmp;
+
+      Inc(i);
+      Dec(j);
+    end;
+  until i > j;
+
+  if L < j then
+    QuickSortSal(A, L, j);
+
+  if i < R then
+    QuickSortSal(A, i, R);
+end;
+
+procedure SortIngByName;
+var
+  A: array of PIngredient;
+  p: PIngredient;
+  i: Integer;
+  cnt: Integer;
+begin
+  if GIngList = nil then
+    Exit;
+
+  cnt:= 0;
+  p:= GIngList;
+
+  while p <> nil do
+  begin
+    Inc(cnt);
+    p:= p^.Next;
+  end;
+
+  SetLength(A, cnt);
+
+  p:= GIngList;
+  i:= 0;
+
+  while p <> nil do
+  begin
+    A[i]:= p;
+    Inc(i);
+    p:= p^.Next;
+  end;
+
+  if cnt > 1 then
+    QuickSortIng(A, 0, cnt - 1);
+
+  GIngList:= A[0];
+
+  for i:= 0 to cnt - 2 do
+    A[i]^.Next:= A[i + 1];
+
+  A[cnt - 1]^.Next:= nil;
+
+  WriteLn('Ингредиенты отсортированы по названию.');
+end;
+
+procedure SortSalByName;
+var
+  A: array of PSalad;
+  p: PSalad;
+  i: Integer;
+  cnt: Integer;
+begin
+  if GSalList = nil then
+    Exit;
+
+  cnt:= 0;
+  p:= GSalList;
+
+  while p <> nil do
+  begin
+    Inc(cnt);
+    p:= p^.Next;
+  end;
+
+  SetLength(A, cnt);
+
+  p:= GSalList;
+  i:= 0;
+
+  while p <> nil do
+  begin
+    A[i]:= p;
+    Inc(i);
+    p:= p^.Next;
+  end;
+
+  if cnt > 1 then
+    QuickSortSal(A, 0, cnt - 1);
+
+  GSalList:= A[0];
+
+  for i:= 0 to cnt - 2 do
+    A[i]^.Next:= A[i + 1];
+
+  A[cnt - 1]^.Next:= nil;
+
+  WriteLn('Салаты отсортированы по названию.');
+end;
+
+procedure SearchIngByName;
+var
+  mask: string;
+  p: PIngredient;
+  found: Boolean;
+begin
+  Write('Часть названия: '); ReadLn(mask);
+  found:= False;
+  p:= GIngList;
+  while p <> nil do
+  begin
+    if Pos(AnsiLowerCase(mask), AnsiLowerCase(p^.Name)) > 0 then
+    begin ShowIng(p); found:= True; end;
+    p:= p^.Next;
+  end;
+  if not found then WriteLn('Не найдено.');
+end;
+
+function SearchSalByName: PSalad;
+var
+  mask: string;
+  p: PSalad;
+  found: Integer;
+  choice: Integer;
+  i: Integer;
+  list: array[1..MAX_ING] of PSalad;
+begin
+  Result:= nil;
+
+  Write('Часть названия: ');
+  ReadLn(mask);
+
+  found:= 0;
+  p:= GSalList;
+
+  while p <> nil do
+  begin
+    if Pos(AnsiLowerCase(mask), AnsiLowerCase(p^.Name)) > 0 then
+    begin
+      Inc(found);
+      if found <= MAX_ING then
+        list[found]:= p;
+    end;
+    p:= p^.Next;
+  end;
+
+  if found = 0 then
+  begin
+    WriteLn('Не найдено.');
+    Exit;
+  end;
+
+  WriteLn;
+  WriteLn('Найденные салаты:');
+
+  for i:= 1 to found do
+    WriteLn(i, '. ', list[i]^.Name);
+
+  WriteLn;
+  choice:= ReadInt('Выберите номер салата: ');
+
+  if (choice < 1) or (choice > found) then
+  begin
+    WriteLn('Неверный номер.');
+    Exit;
+  end;
+
+  Result:= list[choice];
 end;
 
 function NextIngCode: Integer;
@@ -1071,6 +1501,7 @@ begin
   WriteLn(' УПРАВЛЕНИЕ САЛАТАМИ РЕСТОРАНА');
   WriteLn('==========================================');
   try
+  ReadFromFiles;
   FillDemo;
 
   while run do
@@ -1086,10 +1517,14 @@ begin
     WriteLn(' 7. Редактирование');
     WriteLn(' 8. Анализ заказов');
     WriteLn(' 9. Выход БЕЗ сохранения');
-    WriteLn('10. Выход С сохранением');
+    WriteLn(' 10. Выход С сохранением');
     WriteLn('============================');
     ch:= ReadInt('Выбор: ');
     case ch of
+      1:
+        begin
+          ReadFromFiles; Pause;
+        end;
       2:
         begin
           WriteLn(' 1-Ингредиенты 2-Салаты 3-Заказы');
@@ -1097,6 +1532,26 @@ begin
             1: ShowAllIng;
             2: ShowAllSal;
             3: ShowAllOrd;
+          else WriteLn('Неверно.');
+          end;
+          Pause;
+        end;
+      3:
+        begin
+          WriteLn(' 1-Ингредиенты по имени 2-Салаты по имени');
+          case ReadInt('Выбор: ') of
+            1: SortIngByName;
+            2: SortSalByName;
+          else WriteLn('Неверно.');
+          end;
+          Pause;
+        end;
+      4:
+        begin
+          WriteLn(' 1-Ингредиент по имени 2-Салат по имени');
+          case ReadInt('Выбор: ') of
+            1: SearchIngByName;
+            2: SearchSalByName;
           else WriteLn('Неверно.');
           end;
           Pause;
@@ -1137,6 +1592,12 @@ begin
       9:
         begin
           WriteLn('Выход без сохранения.');
+          run:= False;
+        end;
+      10:
+        begin
+          WriteToFiles;
+          WriteLn('До свидания!');
           run:= False;
         end;
     else
