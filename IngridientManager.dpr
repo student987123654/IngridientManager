@@ -374,6 +374,7 @@ begin
 end;
 
 function DelOrd(SalCode: Integer): Boolean;
+
 var
   p: POrder;
   prev: POrder;
@@ -392,6 +393,26 @@ begin
     end;
     prev:= p; p:= p^.Next;
   end;
+end;
+
+procedure ClearAllOrders;
+
+var
+  p: POrder;
+  next: POrder;
+begin
+  p:= GOrdList;
+
+  while p <> nil do
+  begin
+    next:= p^.Next;
+    Dispose(p);
+    p:= next;
+  end;
+
+  GOrdList:= nil;
+
+  WriteLn('Все заказы удалены.');
 end;
 
 procedure ShowAllOrd;
@@ -1434,6 +1455,276 @@ begin
   WriteLn('Сохранено.');
 end;
 
+procedure CheckAndBill;
+var
+  pO: POrder;
+  pS: PSalad;
+  pI: PIngredient;
+  pR: PIngredient;
+  k: Integer;
+  r: Integer;
+  port: Integer;
+  need: Double;
+  ok: Boolean;
+  tProt: Double;
+  tFat: Double;
+  tCarb: Double;
+  total: Double;
+  sub: Double;
+  s: string;
+  UseType: array[0..MAX_ING-1] of Integer;
+  UseRepl: array[0..MAX_ING-1] of Integer;
+  f: TextFile;
+begin
+
+  pO:= GOrdList;
+  while pO <> nil do
+  begin
+    pO^.CanCook:= False;
+    pO:= pO^.Next;
+  end;
+
+  AssignFile(f, 'banquet_bill.txt');
+  Rewrite(f);
+  WriteLn(f, '===== СЧЁТ НА БАНКЕТ =====');
+  WriteLn(f, 'Дата: ', DateToStr(Now));
+  WriteLn('===== ПРОВЕРКА ПРИГОТОВЛЕНИЯ =====');
+
+  pO:= GOrdList;
+  while pO <> nil do
+  begin
+    pS:= FindSal(pO^.SaladCode);
+    if pS = nil then
+    begin
+      WriteLn('Салат код ', pO^.SaladCode, ' не найден!');
+      pO:= pO^.Next;
+      Continue;
+    end;
+
+    port:= pO^.Portions;
+    ok:= True;
+    tProt:= 0;
+    tFat:= 0;
+    tCarb:= 0;
+
+    for k:= 0 to MAX_ING - 1 do
+    begin
+      UseType[k]:= 0;
+      UseRepl[k]:= 0;
+    end;
+
+    WriteLn('');
+    WriteLn('Салат: "', pS^.Name, '" x', port, ' порций');
+    WriteLn(' Цена одной порции: ', pS^.Price:0:2, ' руб.');
+    WriteLn(f, '');
+    WriteLn(f, 'Салат: "', pS^.Name, '" x', port, ' порций');
+    WriteLn(f, ' Цена одной порции: ', pS^.Price:0:2, ' руб.');
+
+    for k:= 0 to pS^.IngCount - 1 do
+    begin
+      pI:= FindIng(pS^.Ings[k].IngCode);
+      need:= pS^.Ings[k].Amount * port;
+
+      if pI = nil then
+      begin
+        WriteLn(' [!] Ингредиент код ', pS^.Ings[k].IngCode, ' не найден!');
+        WriteLn(f, ' [!] Ингредиент код ', pS^.Ings[k].IngCode, ' не найден!');
+        ok:= False;
+      end
+      else if pI^.Quantity >= need then
+      begin
+        UseType[k]:= 1;
+      end
+      else if pI^.ReplCount > 0 then
+      begin
+        pR:= nil;
+        for r:= 0 to pI^.ReplCount - 1 do
+        begin
+          pR:= FindIng(pI^.Replaces[r]);
+          if (pR <> nil) and (pR^.Quantity >= need) then
+            Break;
+          pR:= nil;
+        end;
+
+        if pR <> nil then
+        begin
+          UseType[k]:= 2;
+          UseRepl[k]:= pR^.Code;
+          WriteLn(' [ЗАМЕНА] "', pI^.Name, '" -> "', pR^.Name,
+                  '", кол-во: ', need:0:1, ' г');
+          WriteLn(f, ' [ЗАМЕНА] "', pI^.Name, '" -> "', pR^.Name,
+                  '", кол-во: ', need:0:1, ' г');
+        end
+        else
+        begin
+          WriteLn(' [ОШИБКА] "', pI^.Name, '" и все заменители не хватает!');
+          WriteLn(f, ' [ОШИБКА] "', pI^.Name, '" и все заменители не хватает!');
+          ok:= False;
+        end;
+      end
+      else
+      begin
+        WriteLn(' [ОШИБКА] "', pI^.Name, '" не хватает (',
+                need:0:1, 'г нужно, ', pI^.Quantity:0:1,
+                'г есть). Заменителей нет.');
+        WriteLn(f, ' [ОШИБКА] "', pI^.Name, '" не хватает. Заменителей нет.');
+        ok:= False;
+      end;
+    end;
+
+    if ok then
+    begin
+      for k:= 0 to pS^.IngCount - 1 do
+      begin
+        need:= pS^.Ings[k].Amount * port;
+        if UseType[k] = 1 then
+        begin
+          pI:= FindIng(pS^.Ings[k].IngCode);
+          if pI <> nil then
+          begin
+            pI^.Quantity:= pI^.Quantity - need;
+            tProt:= tProt + (pI^.Proteins / 100) * need;
+            tFat:= tFat + (pI^.Fats / 100) * need;
+            tCarb:= tCarb + (pI^.Carbs / 100) * need;
+          end;
+        end
+        else if UseType[k] = 2 then
+        begin
+          pR:= FindIng(UseRepl[k]);
+          if pR <> nil then
+          begin
+            pR^.Quantity:= pR^.Quantity - need;
+            tProt:= tProt + (pR^.Proteins / 100) * need;
+            tFat:= tFat + (pR^.Fats / 100) * need;
+            tCarb:= tCarb + (pR^.Carbs / 100) * need;
+          end;
+        end;
+      end;
+
+      pO^.CanCook:= True;
+      WriteLn(' >> ОДОБРЕН. Б:', tProt:0:2, 'г Ж:', tFat:0:2, 'г У:', tCarb:0:2, 'г');
+      WriteLn(f, ' >> ОДОБРЕН. Б:', tProt:0:2, 'г Ж:', tFat:0:2, 'г У:', tCarb:0:2, 'г');
+    end
+    else
+    begin
+      pO^.CanCook:= False;
+      WriteLn(' >> НЕ МОЖЕТ БЫТЬ ПРИГОТОВЛЕН.');
+      WriteLn(f, ' >> НЕ МОЖЕТ БЫТЬ ПРИГОТОВЛЕН.');
+    end;
+
+    pO:= pO^.Next;
+  end;
+
+  total:= 0;
+  WriteLn('');
+  WriteLn('=== СЧЁТ ===');
+  WriteLn(f, '');
+  WriteLn(f, '=== ИТОГ ===');
+
+  pO:= GOrdList;
+  while pO <> nil do
+  begin
+    if pO^.CanCook then
+    begin
+      pS:= FindSal(pO^.SaladCode);
+      if pS <> nil then
+      begin
+        sub:= pS^.Price * pO^.Portions;
+        WriteLn(' ', pS^.Name, ' x', pO^.Portions,
+                ' (', pS^.Price:0:2, ' руб./порция) = ', sub:0:2, ' руб.');
+        WriteLn(f, ' ', pS^.Name, ' x', pO^.Portions,
+                ' (', pS^.Price:0:2, ' руб./порция) = ', sub:0:2, ' руб.');
+        total:= total + sub;
+      end;
+    end;
+    pO:= pO^.Next;
+  end;
+
+  WriteLn(' ИТОГО: ', total:0:2, ' руб.');
+  WriteLn(f, ' ИТОГО: ', total:0:2, ' руб.');
+  WriteLn(f, '==========================');
+   CloseFile(f);
+  WriteLn('Результат записан в banquet_bill.txt');
+
+  WriteLn;
+  Write('Завершить чек? (д/н): ');
+  ReadLn(s);
+
+  if (s = 'д') or (s = 'Д') then
+  begin
+    ClearAllOrders;
+    WriteLn('Чек завершён.');
+  end
+  else
+    WriteLn('Чек оставлен открытым.');
+end;
+
+procedure ApprovedWithIng;
+var
+  ingCode: Integer;
+  pIng: PIngredient;
+  pO: POrder;
+  pS: PSalad;
+  k: Integer;
+  cnt: Integer;
+  found: array[0..99] of PSalad;
+  tmp: PSalad;
+  j: Integer;
+  m: Integer;
+  sw: Boolean;
+  hasIt: Boolean;
+  f: TextFile;
+begin
+  pIng:= SelectIngredientByName;
+  if pIng = nil then Exit;
+  ingCode:= pIng^.Code;
+  cnt:= 0;
+  pO:= GOrdList;
+  while pO <> nil do
+  begin
+    if pO^.CanCook then
+    begin
+      pS:= FindSal(pO^.SaladCode);
+      if pS <> nil then
+      begin
+        hasIt:= False;
+        for k:= 0 to pS^.IngCount - 1 do
+          if pS^.Ings[k].IngCode = ingCode then hasIt:= True;
+        if hasIt and (cnt < 100) then
+        begin
+          found[cnt]:= pS;
+          Inc(cnt);
+        end;
+      end;
+    end;
+    pO:= pO^.Next;
+  end;
+
+  if cnt = 0 then begin WriteLn('Одобренных салатов с этим ингредиентом нет.'); Exit; end;
+
+  repeat
+    sw:= False;
+    for j:= 0 to cnt - 2 do
+      if found[j]^.Name > found[j+1]^.Name then
+      begin
+        tmp:= found[j]; found[j]:= found[j+1]; found[j+1]:= tmp;
+        sw:= True;
+      end;
+  until not sw;
+
+  WriteLn('=== ОДОБРЕННЫЕ САЛАТЫ С ИНГРЕДИЕНТОМ ', pIng^.Name, ' ===');
+  AssignFile(f, 'approved_salads.txt');
+  Rewrite(f);
+  WriteLn(f, '=== ОДОБРЕННЫЕ САЛАТЫ С ИНГРЕДИЕНТОМ ', pIng^.Name, ' ===');
+  for m:= 0 to cnt - 1 do
+  begin
+    WriteLn(' ', found[m]^.Name, ' (код ', found[m]^.Code, ')');
+    WriteLn(f, ' ', found[m]^.Name, ' (код ', found[m]^.Code, ')');
+  end;
+  CloseFile(f);
+  WriteLn('Результат записан в approved_salads.txt');
+end;
+
 procedure FillDemo;
 var pS: PSalad;
 begin
@@ -1517,7 +1808,7 @@ begin
     WriteLn(' 7. Редактирование');
     WriteLn(' 8. Анализ заказов');
     WriteLn(' 9. Выход БЕЗ сохранения');
-    WriteLn(' 10. Выход С сохранением');
+    WriteLn('10. Выход С сохранением');
     WriteLn('============================');
     ch:= ReadInt('Выбор: ');
     case ch of
@@ -1585,6 +1876,17 @@ begin
             1: DoEditIng;
             2: DoEditSal;
             3: DoEditOrd;
+          else WriteLn('Неверно.');
+          end;
+          Pause;
+        end;
+      8:
+        begin
+          WriteLn(' 1-Проверить приготовление и счёт');
+          WriteLn(' 2-Одобренные салаты с ингредиентом');
+          case ReadInt('Выбор: ') of
+            1: CheckAndBill;
+            2: ApprovedWithIng;
           else WriteLn('Неверно.');
           end;
           Pause;
